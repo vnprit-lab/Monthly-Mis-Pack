@@ -18,6 +18,9 @@ window.MIS = window.MIS || {};
       case 'days': return '#,##0" d";-#,##0" d";"–"';
       case 'x': return '0.00"x";-0.00"x";"–"';
       case 'months': return '0.0;-0.0;"–"';
+      case 'num': return '#,##0;(#,##0);"–"';
+      case 'num1': return '0.0;(0.0);"–"';
+      case 'rs': return '"₹"#,##0.00;("₹"#,##0.00);"–"';
       default: return 'General';
     }
   }
@@ -139,6 +142,12 @@ window.MIS = window.MIS || {};
     }
     if (all || which === 'ratios') addTableSheet(wb, Object.assign(T.ratioTable(model, sel), { sheetName: 'Ratios' }), meta);
     if (all) {
+      const A = MIS.analytics;
+      const dt = A.debtTable(model, sel);
+      if (dt) addTableSheet(wb, Object.assign(dt, { sheetName: 'Debt & Funding' }), meta);
+      addTableSheet(wb, Object.assign(A.breakevenTable(model, sel), { sheetName: 'Breakeven' }), meta);
+      addTableSheet(wb, Object.assign(A.costTable(model, sel), { sheetName: 'Cost Analysis' }), meta);
+      if (model.ops && Object.keys(model.ops).length) addTableSheet(wb, Object.assign(A.unitTable(model, sel), { sheetName: 'Unit Economics' }), meta);
       addTableSheet(wb, Object.assign(T.ledgerTable(model, sel), { sheetName: 'P&L Ledger Detail' }), meta);
       addMapping(wb, model);
     }

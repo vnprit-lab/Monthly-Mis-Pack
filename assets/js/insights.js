@@ -164,6 +164,42 @@ window.MIS = window.MIS || {};
         body: 'Current assets ' + F.money(b.ca) + ' vs current liabilities incl. short-term bank borrowings ' + F.money(b.currentLiab) + '. Excluding inventory, liquid assets cover ' + F.x(r.quickRatio) + ' of short-term obligations.' });
     }
 
+    /* ============ GROWTH, BREAKEVEN, DEBT SERVICE, COSTS ============ */
+    const A = MIS.analytics, grow = [];
+    if (pl) {
+      const cmp = A.comparator(model, key);
+      if (cmp && cmp.kind === 'avg') {
+        const g = F.change(pl.revNet, cmp.pl.revNet);
+        grow.push({ tone: g === null ? 'info' : g >= 0 ? 'pos' : 'watch',
+          title: 'Net revenue ' + F.signedPct(g) + ' vs the ' + model.gap.label + ' monthly average (' + F.money(cmp.pl.revNet) + ')',
+          body: 'Months before ' + M + ' are only available as one block (FY-to-date TB minus ' + M + '). Upload each month\'s TB to see a true month-on-month trend.' });
+      }
+      const be = A.breakeven(pl, 1);
+      if (be && be.be) grow.push({ tone: be.gap >= 0 ? 'pos' : be.gap > -0.2 ? 'watch' : 'neg',
+        title: 'Revenue is ' + F.signedPct(be.gap, 0) + ' vs EBITDA breakeven of ' + F.money(be.be) + ' a month',
+        body: 'Contribution margin ' + F.pct(be.cm) + ' on fixed costs of ' + F.money(be.fixedM) + ' a month. Including interest, cash breakeven is ' + F.money(be.beCash) + ' a month. Each +1 pp of contribution margin lowers breakeven by about ' + F.money(be.be - be.fixedM / (be.cm + 0.01)) + '.' });
+      else if (be) grow.push({ tone: 'neg', title: 'Contribution margin is ' + F.pct(be.cm) + ' — no breakeven at current pricing and costs',
+        body: 'Variable costs (materials consumed, direct, selling & trade, power) exceed revenue in ' + M + '. If closing stock is provisional this is likely overstated — enter actual closing stock first.' });
+      const y = ytd.pl, ny = y ? Math.round(y.days / 30.4) : 0, bey = y ? A.breakeven(y, ny) : null;
+      if (bey && bey.be) grow.push({ tone: bey.gap >= 0 ? 'pos' : 'watch', title: 'On a YTD basis revenue averages ' + F.money(bey.revM) + ' a month vs breakeven of ' + F.money(bey.be),
+        body: 'YTD contribution margin ' + F.pct(bey.cm) + '. YTD is flattered by the stock build-up if closing stock is overstated.' });
+      const ca = A.costAnalysis(model, key);
+      ca.spikes.slice(0, 3).forEach(x => prof.push({ tone: 'watch', title: 'Cost spike: ' + x.name + ' at ' + F.money(x.cur) + ' vs usual ' + F.money(x.avg),
+        body: 'Booked under ' + MIS.config.ALL_LINES[x.line].label + '. Check for one-offs, prior-period entries or misclassification before the MIS goes out.' }));
+      if (ca.top[0]) prof.push({ tone: 'info', title: 'Largest cost ledger: ' + ca.top[0].name + ' — ' + F.money(ca.top[0].cur) + ' (' + F.pct(ca.top[0].pctRev) + ' of revenue)',
+        body: 'Top five: ' + ca.top.slice(0, 5).map(x => x.name + ' ' + F.money(x.cur)).join('; ') + '.' });
+      const chn = A.mix(pl, A.channelOf);
+      if (chn[0] && chn[0].share > 0.5) grow.push({ tone: 'watch', title: chn[0].k + ' is ' + F.pct(chn[0].share, 0) + ' of gross sales',
+        body: 'Channel mix: ' + chn.map(x => x.k + ' ' + F.pct(x.share, 0)).join(', ') + '. A single dominant channel sets your pricing, payment terms and returns policy.' });
+    }
+    const ds = A.debtService(model, key), lbk = A.loanBook(model, key);
+    if (lbk) sol.push({ tone: 'info', title: 'Loan book ' + F.money(lbk.total) + ' across ' + lbk.rows.filter(x => x.bal > 1).length + ' facilities',
+      body: lbk.rows.filter(x => x.bal > 1).map(x => x.name + ' ' + F.money(x.bal) + ' (' + F.pct(x.share, 0) + ')').join('; ') + '.' });
+    if (ds) sol.push({ tone: ds.dscr === null ? 'info' : ds.dscr < 1 ? 'neg' : ds.dscr < 1.25 ? 'watch' : 'pos',
+      title: 'Debt service cover ' + (ds.dscr === null ? 'n/a' : F.x(ds.dscr)) + '; effective cost of debt ' + F.pct(ds.costOfDebt),
+      body: 'Interest ' + F.money(ds.interest) + (ds.hasPrev ? ' + principal repaid ' + F.money(ds.principal) : ' (principal needs the prior month)') + ' against EBITDA of ' + F.money(pl ? pl.ebitda : null) + '.' +
+        (ds.emi ? ' Contracted EMIs of ' + F.money(ds.emi) + ' are covered ' + F.x(ds.emiCover) + ' by EBITDA.' : ' Enter contracted EMIs in Data & mapping to track EMI cover.') });
+
     /* ============ DATA INTEGRITY ============ */
     model.tbs.forEach(tb => {
       checks.push({ status: tb.checks.balanced ? 'ok' : 'fail', text: 'TB ' + tb.from + ' → ' + tb.to + ': ' + (tb.checks.balanced ? 'balanced' : 'NOT balanced') + ' (Dr ' + F.money(tb.checks.totalDr) + ')' });
@@ -182,7 +218,7 @@ window.MIS = window.MIS || {};
     (model.unknownGroups || []).forEach(g => checks.push({ status: 'warn', text: 'Unrecognised Tally group "' + g + '" — review its mapping.' }));
 
     /* ============ HEADLINE & KEY MESSAGES ============ */
-    const all = [].concat(cash, wc, prof, sol);
+    const all = [].concat(cash, wc, prof, sol, grow);
     const ranked = all.filter(x => x.tone !== 'info').sort((a, c) => RANK[a.tone] - RANK[c.tone]);
     const negs = ranked.filter(x => x.tone === 'neg');
     const pos = ranked.filter(x => x.tone === 'pos');
@@ -200,7 +236,8 @@ window.MIS = window.MIS || {};
     return { headline: headline, messages: messages, sections: [
       { id: 'cash', title: 'Cash & liquidity — are we sufficiently funded?', items: cash },
       { id: 'wc', title: 'Working capital — where is the cash tied up?', items: wc },
-      { id: 'prof', title: 'Profitability — what drives the margin?', items: prof },
+      { id: 'grow', title: 'Growth & breakeven — how far from self-sustaining?', items: grow },
+      { id: 'prof', title: 'Profitability & costs — what drives the margin?', items: prof },
       { id: 'sol', title: 'Balance sheet & solvency', items: sol }
     ], checks: checks };
   }

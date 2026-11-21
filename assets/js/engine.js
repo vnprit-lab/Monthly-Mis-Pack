@@ -450,6 +450,48 @@ window.MIS = window.MIS || {};
     model.ledgerUniverse = Object.keys(uni).map(k => uni[k]);
     model.unknownGroups = Array.from(new Set(tbs.flatMap(t => t.groups.map(g => g.name)).filter(g => C.groupKind(g) === 'UNKNOWN')));
 
+    /**
+     * Statements for an arbitrary period (used for quarters).
+     * P&L comes from a matching TB, a TB difference, or the sum of the months.
+     */
+    model.period = function (from, to) {
+      let fl = flows(from, to);
+      if (!fl) {
+        const ms = months.filter(x => x.start >= from && x.end <= to);
+        if (ms.length && ms[0].start === from && ms[ms.length - 1].end === to && ms.every(x => x.flows))
+          fl = { map: sumMaps(ms.map(x => x.flows.map)), src: 'sum' };
+      }
+      const pl = fl ? plStatement(fl.map, stockClose(addDays(from, -1)).v, stockClose(to).v, daysBetween(from, to), { src: fl.src }) : null;
+      const bs = bsAt(to);
+      const cf = pl ? cashFlow(bsAt(addDays(from, -1)), bs, pl) : null;
+      return { pl: pl, bs: bs, cf: cf, days: daysBetween(from, to) };
+    };
+    model.stockClose = stockClose;
+
+    // All FY months (for the month picker and the data-coverage strip)
+    model.fyMonths = months.map(m => ({ key: m.key, label: m.label, start: m.start, end: m.end, hasPL: m.hasPL, hasBS: m.hasBS }));
+
+    // Months before the first monthly P&L that can only be seen as one block
+    // (e.g. Apr–Sep = YTD Oct TB − Oct TB). Shown as a total and a monthly average.
+    const firstPL = view.find(m => m.hasPL);
+    if (firstPL && firstPL.start > fyStart) {
+      const to = addDays(firstPL.start, -1);
+      const per = model.period(fyStart, to);
+      if (per.pl) {
+        const n = months.filter(m => m.end <= to).length;
+        model.gap = { from: fyStart, to: to, n: n, label: monthLabel(fyStart).slice(0, 3) + '–' + monthLabel(to).slice(0, 3), pl: per.pl };
+      }
+    }
+
+    // Ledger-level balances at a month-end (for the loan book)
+    model.ledgersAt = function (date) {
+      const ending = tbs.filter(t => t.to === date);
+      if (!ending.length) return null;
+      const tb = ending.find(t => t.from === monthStart(date)) || ending[ending.length - 1];
+      return tb._led;
+    };
+    model.ops = state.ops || {};
+
     model.helpers = { monthLabel, prevMonthEnd, addDays, fyStartOf };
     return model;
   }

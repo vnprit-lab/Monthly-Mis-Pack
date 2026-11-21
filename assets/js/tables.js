@@ -108,14 +108,45 @@ window.MIS = window.MIS || {};
     const ms = monthsUpTo(model, sel);
     const prev = prevOf(model, sel);
     const ytd = model.ytd[sel] && model.ytd[sel].pl;
-    const sources = ms.map(m => model.pl[m.key] || null);
-    const selCol = ms.length - 1;
-    const prevCol = prev ? ms.findIndex(m => m.key === prev.key) : -1;
+    const gap = model.gap, A = MIS.analytics;
+    const sources = [], cols = [];
+    if (gap) {
+      sources.push(gap.pl, A.gapAvg(model));
+      cols.push({ label: gap.label + ' total', kind: 'gap' }, { label: gap.label + ' avg / month', kind: 'gap' });
+    }
+    const off = sources.length;
+    ms.forEach(m => { sources.push(model.pl[m.key] || null); cols.push({ label: m.label, kind: 'month', provisional: model.stock[m.key] && model.stock[m.key].src === 'provisional' }); });
+    const selCol = off + ms.length - 1;
+    let prevCol = prev && model.pl[prev.key] ? off + ms.findIndex(m => m.key === prev.key) : -1;
+    let cmpLabel = 'MoM %';
+    if (prevCol < 0 && gap && ms[0].key === sel) { prevCol = 1; cmpLabel = 'vs ' + gap.label + ' avg'; }
     sources.push(ytd || null);
-    const cols = ms.map(m => ({ label: m.label, kind: 'month', provisional: model.stock[m.key] && model.stock[m.key].src === 'provisional' }));
-    cols.push({ label: 'YTD ' + ms[selCol].label, kind: 'ytd' });
-    cols.push({ label: 'MoM %', kind: 'mom' });
+    cols.push({ label: 'YTD ' + ms[ms.length - 1].label, kind: 'ytd' });
+    cols.push({ label: cmpLabel, kind: 'mom' });
     const rows = buildRows(plDefs(), sources, [momExtra(ms.length, selCol, prevCol)]);
+
+    // Growth section: each month vs the previous month (first month vs the earlier-months average)
+    const base = i => {
+      const mi = i - off;
+      if (mi < 0 || mi >= ms.length) return null;
+      for (let j = mi - 1; j >= 0; j--) if (model.pl[ms[j].key]) return j === mi - 1 ? sources[off + j] : null;
+      return gap && mi === 0 ? sources[1] : null;
+    };
+    const blank = () => ({ v: null, f: 'text' });
+    rows.push({ label: 'Growth (vs previous month; first month vs ' + (gap ? gap.label + ' average' : 'n/a') + ')', type: 'section', cells: sources.map(blank).concat([blank()]) });
+    [['Net revenue growth', p => p.revNet, 'chg'], ['Gross profit growth', p => p.gp, 'chg'], ['Operating expenses growth', p => p.opex, 'chg'],
+      ['EBITDA change (₹)', p => p.ebitda, 'amtd'], ['Gross margin change', p => (p.revNet ? p.gp / p.revNet : null), 'pp'], ['EBITDA margin change', p => (p.revNet ? p.ebitda / p.revNet : null), 'pp']]
+      .forEach(g => {
+        const cells = sources.map((s, i) => {
+          const b = base(i);
+          if (!s || !b) return { v: null, f: g[2] === 'amtd' ? 'amt' : g[2] };
+          const c = g[1](s), p = g[1](b);
+          if (g[2] === 'chg') return { v: F.change(c, p), f: 'chg' };
+          return { v: isNum(c) && isNum(p) ? c - p : null, f: g[2] === 'amtd' ? 'amt' : 'pp' };
+        });
+        cells.push(blank());
+        rows.push({ label: g[0], type: 'pct', indent: 1, cells: cells });
+      });
     return { id: 'pl', title: 'Statement of profit & loss', subtitle: model.company + ' · ' + F.unitDef().label, columns: cols, rows: rows };
   }
 

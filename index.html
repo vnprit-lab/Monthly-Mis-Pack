@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -28,7 +28,9 @@
       </label>
       <button class="btn btn-primary" id="btnUpload" title="Upload one or more Tally trial balance Excel files">⬆ Upload trial balance</button>
       <button class="btn btn-ghost" id="btnExcel" title="Download the full MIS pack as Excel">⬇ Excel pack</button>
+      <button class="btn btn-ghost" id="btnModel" title="Download the financial model: P&amp;L, balance sheet and cash flow on one sheet (monthly, quarterly, YTD) plus ratios">⬇ Financials</button>
       <button class="btn btn-ghost" id="btnPrint" title="Print or save the investor pack as PDF">⎙ PDF pack</button>
+      <button class="btn btn-ghost" id="btnTheme" title="Switch between dark and light theme">☀ Light</button>
     </div>
   </header>
 
@@ -38,6 +40,9 @@
     <button data-tab="bs">Balance sheet</button>
     <button data-tab="cf">Cash flow</button>
     <button data-tab="wc">Working capital &amp; ratios</button>
+    <button data-tab="debt">Debt &amp; funding</button>
+    <button data-tab="unit">Unit economics</button>
+    <button data-tab="costs">Cost analysis</button>
     <button data-tab="insights">Insights &amp; risks</button>
     <button data-tab="data">Data &amp; mapping</button>
   </nav>
@@ -62,7 +67,9 @@
   <script src="assets/js/engine.js"></script>
   <script src="assets/js/insights.js"></script>
   <script src="assets/js/tables.js"></script>
+  <script src="assets/js/analytics.js"></script>
   <script src="assets/js/export.js"></script>
+  <script src="assets/js/model-export.js"></script>
   <script src="assets/js/charts.js"></script>
   <script src="assets/js/app.js"></script>
 </body>

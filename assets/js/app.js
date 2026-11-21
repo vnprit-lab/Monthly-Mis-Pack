@@ -11,7 +11,7 @@
   const esc = F.esc;
 
   /* ------------------------------ state --------------------------------- */
-  const state = { tbs: [], stockOverrides: {}, mapOverrides: {}, settings: { unit: 'lakh' }, sel: null, fy: null, tab: 'summary', mapFilter: '', mapOnlyOver: false };
+  const state = { tbs: [], stockOverrides: {}, mapOverrides: {}, ops: {}, settings: { unit: 'lakh', theme: 'dark' }, sel: null, fy: null, tab: 'summary', mapFilter: '', mapOnlyOver: false };
   let model = null, dirty = true;
 
   function load() {
@@ -19,13 +19,13 @@
       const raw = localStorage.getItem(STORE_KEY);
       if (!raw) return;
       const s = JSON.parse(raw);
-      state.tbs = s.tbs || []; state.stockOverrides = s.stockOverrides || {}; state.mapOverrides = s.mapOverrides || {};
+      state.tbs = s.tbs || []; state.stockOverrides = s.stockOverrides || {}; state.mapOverrides = s.mapOverrides || {}; state.ops = s.ops || {};
       state.settings = Object.assign(state.settings, s.settings || {});
       state.tab = s.tab || 'summary';
     } catch (e) { console.warn('Could not read saved data', e); }
   }
   function serialise() {
-    return JSON.stringify({ version: 1, savedAt: new Date().toISOString(), tbs: state.tbs, stockOverrides: state.stockOverrides, mapOverrides: state.mapOverrides, settings: state.settings, tab: state.tab },
+    return JSON.stringify({ version: 1, savedAt: new Date().toISOString(), tbs: state.tbs, stockOverrides: state.stockOverrides, mapOverrides: state.mapOverrides, ops: state.ops, settings: state.settings, tab: state.tab },
       (k, v) => (k && k.charAt(0) === '_' ? undefined : v));
   }
   function save() {
@@ -54,6 +54,9 @@
       case 'days': return F.days(c.v);
       case 'x': return F.x(c.v);
       case 'months': return F.ok(c.v) ? (c.v >= 24 ? '24+' : c.v.toFixed(1)) : '–';
+      case 'num': return F.ok(c.v) ? Math.round(c.v).toLocaleString('en-IN') : '–';
+      case 'num1': return F.ok(c.v) ? c.v.toFixed(1) : '–';
+      case 'rs': return F.ok(c.v) ? '₹' + c.v.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '–';
       default: return c.v === null || c.v === undefined ? '' : esc(c.v);
     }
   }
@@ -62,7 +65,7 @@
     const lastMonth = t.columns.map(c => c.kind).lastIndexOf('month');
     let h = '<div class="table-wrap"><table class="fin"><thead><tr><th>Particulars</th>';
     t.columns.forEach((c, i) => {
-      const cls = (i === lastMonth ? 'sel' : '') + (c.kind === 'ytd' ? ' ytd' : '');
+      const cls = (i === lastMonth ? 'sel' : '') + (c.kind === 'ytd' || c.kind === 'gap' ? ' ytd' : '');
       h += '<th class="' + cls + '">' + esc(c.label) + (c.provisional ? '<span class="prov" title="Closing stock provisional">PROV</span>' : '') + '</th>';
     });
     h += '</tr></thead><tbody>';
@@ -70,8 +73,9 @@
       h += '<tr class="' + r.type + '"><td class="ind' + (r.indent || 0) + '">' + esc(r.label) + '</td>';
       r.cells.forEach((c, i) => {
         const col = t.columns[i] || {};
-        let cls = i === lastMonth ? 'sel' : col.kind === 'ytd' ? 'ytd' : (col.kind === 'mom' || col.kind === 'delta') ? 'mom' : '';
+        let cls = i === lastMonth ? 'sel' : (col.kind === 'ytd' || col.kind === 'gap') ? 'ytd' : (col.kind === 'mom' || col.kind === 'delta') ? 'mom' : col.kind === 'text' ? 'txt' : '';
         if (col.kind === 'mom' && F.ok(c.v) && c.v !== 0) cls += c.v > 0 ? ' up' : ' down';
+        if (col.kind === 'costchg') cls = 'mom' + (F.ok(c.v) && c.v !== 0 ? (c.v > 0 ? ' down' : ' up') : '');
         if ((r.type === 'total' || r.type === 'subtotal') && c.f === 'amt' && F.ok(c.v) && c.v < -0.5) cls += ' neg-v';
         h += '<td class="' + cls + '">' + (r.type === 'section' ? '' : fmtCell(c)) + '</td>';
       });
@@ -128,16 +132,28 @@
   }
 
   function renderSummary(m, sel) {
-    const c = ctx(m, sel), ins = MIS.insights.generate(m, sel);
-    const P = c.prev ? c.prev.label : 'prior month';
-    const k = [];
+    const c = ctx(m, sel), ins = MIS.insights.generate(m, sel), A = MIS.analytics;
+    const cmp = A.comparator(m, sel);           // previous month, or the Apr–Sep average
+    const cp = cmp ? cmp.pl : null;
+    const P = cmp ? cmp.label : (c.prev ? c.prev.label : 'prior month');
+    const cgm = cp && cp.revNet ? cp.gp / cp.revNet : null;
+    const k = [], k2 = [];
     const tile = (lbl, val, d, ytd, neg) => '<div class="kpi"><div class="lbl">' + lbl + '</div><div class="val' + (neg ? ' neg' : '') + '">' + val + '</div><div class="d">' + d + '</div>' + (ytd ? '<div class="ytd">' + ytd + '</div>' : '') + '</div>';
     const u = F.unitDef().short;
     if (c.pl) {
-      k.push(tile('Net revenue', amtU(c.pl.revNet) + ' <small style="font-size:13px">' + u + '</small>', delta(c.pl.revNet, c.ppl && c.ppl.revNet, P), c.ytd.pl ? 'YTD ' + F.money(c.ytd.pl.revNet) : ''));
-      k.push(tile('Gross margin', F.pct(c.r.gm), delta(c.r.gm, c.pr.gm, P, 'pp'), c.ytd.pl && c.ytd.pl.revNet ? 'YTD ' + F.pct(c.ytd.pl.gp / c.ytd.pl.revNet) : '', c.r.gm < 0));
-      k.push(tile('EBITDA', amtU(c.pl.ebitda) + ' <small style="font-size:13px">' + u + '</small>', 'Margin ' + F.pct(c.r.ebitdaM) + ' · ' + delta(c.pl.ebitda, c.ppl && c.ppl.ebitda, P), c.ytd.pl ? 'YTD ' + F.money(c.ytd.pl.ebitda) : '', c.pl.ebitda < 0));
-      k.push(tile('Profit after tax', amtU(c.pl.pat) + ' <small style="font-size:13px">' + u + '</small>', delta(c.pl.pat, c.ppl && c.ppl.pat, P), c.ytd.pl ? 'YTD ' + F.money(c.ytd.pl.pat) : '', c.pl.pat < 0));
+      k.push(tile('Net revenue', amtU(c.pl.revNet) + ' <small style="font-size:13px">' + u + '</small>', delta(c.pl.revNet, cp && cp.revNet, P), c.ytd.pl ? 'YTD ' + F.money(c.ytd.pl.revNet) : ''));
+      k.push(tile('Gross margin', F.pct(c.r.gm), delta(c.r.gm, cgm, P, 'pp'), c.ytd.pl && c.ytd.pl.revNet ? 'YTD ' + F.pct(c.ytd.pl.gp / c.ytd.pl.revNet) : '', c.r.gm < 0));
+      k.push(tile('EBITDA', amtU(c.pl.ebitda) + ' <small style="font-size:13px">' + u + '</small>', 'Margin ' + F.pct(c.r.ebitdaM) + ' · ' + delta(c.pl.ebitda, cp && cp.ebitda, P), c.ytd.pl ? 'YTD ' + F.money(c.ytd.pl.ebitda) : '', c.pl.ebitda < 0));
+      k.push(tile('Profit after tax', amtU(c.pl.pat) + ' <small style="font-size:13px">' + u + '</small>', delta(c.pl.pat, cp && cp.pat, P), c.ytd.pl ? 'YTD ' + F.money(c.ytd.pl.pat) : '', c.pl.pat < 0));
+      // Business-health row
+      const lb = A.loanBook(m, sel), ds = A.debtService(m, sel), be = A.breakeven(c.pl, 1), ca = A.costAnalysis(m, sel);
+      if (lb) k2.push(tile('Total loan book', F.money(lb.total), F.ok(lb.prevTotal) ? delta(lb.total, lb.prevTotal, c.prev.label) : lb.rows.length + ' facilities', 'Net debt ' + F.money(lb.netDebt)));
+      if (ds) k2.push(tile('Interest & cost of debt', F.money(ds.interest), 'Effective ' + F.pct(ds.costOfDebt) + ' p.a.', ds.emi ? 'EMIs due ' + F.money(ds.emi) : 'EMI: enter in Data & mapping'));
+      if (ds) k2.push(tile('Debt service cover', ds.dscr === null ? 'n/a' : ds.dscr < 0 ? 'EBITDA &lt; 0' : F.x(ds.dscr), ds.hasPrev ? 'EBITDA ÷ (interest + principal)' : 'EBITDA ÷ interest (no prior month)', 'Lenders look for > 1.25x', ds.dscr !== null && ds.dscr < 1.25));
+      if (be) k2.push(tile('EBITDA breakeven', be.be ? F.money(be.be) + '<small style="font-size:12px"> /mo</small>' : 'n/a', be.be ? 'Revenue is ' + (be.gap >= 0 ? '<span class="up">' : '<span class="down">') + F.signedPct(be.gap, 0) + '</span> vs breakeven' : 'Contribution margin ≤ 0', 'Contribution margin ' + F.pct(be.cm), be.gap !== null && be.gap < 0));
+      if (ca.top.length) k2.push(tile('Largest cost line', esc(ca.top[0].name.length > 22 ? ca.top[0].name.slice(0, 21) + '…' : ca.top[0].name), F.money(ca.top[0].cur) + ' · ' + F.pct(ca.top[0].pctRev) + ' of revenue', ca.spikes.length ? ca.spikes.length + ' cost spike(s) flagged' : 'No spikes vs history'));
+      const ch = A.mix(c.pl, A.channelOf)[0];
+      if (ch) k2.push(tile('Top channel share', F.pct(ch.share, 0), esc(ch.k) + ' of gross sales', ch.share > 0.5 ? 'Concentration risk' : 'Diversified', ch.share > 0.6));
     }
     if (c.b) {
       const effective = c.b.cash - c.b.lines.BR_BANKCR - c.b.lines.BR_ST;
@@ -148,8 +164,10 @@
     }
 
     let h = pageHead('Executive summary · ' + c.mon.label + ' · ' + m.fyLabel, esc(ins.headline),
-      provisionalNote(m, sel), dlBtn('all', 'Excel pack'));
+      provisionalNote(m, sel), dlBtn('all', 'Excel pack') + dlBtn('model', 'Financials model (Excel)'));
+    h += coverageHtml(m);
     h += '<div class="kpis">' + k.join('') + '</div>';
+    if (k2.length) h += '<div class="kicker" style="margin-top:4px">Business health</div><div class="kpis">' + k2.join('') + '</div>';
 
     h += '<div class="grid g-main">';
     h += '<div class="card exhibit"><div class="exhibit-no">Key messages for investors</div><h3>What the numbers say this month</h3><ol class="messages">' +
@@ -170,7 +188,8 @@
 
     return { html: h, after: () => {
       const labels = c.upto.map(x => x.label);
-      CH.monthlyBars('chRev', labels, c.upto.map(x => m.pl[x.key] ? CH.unitVal(m.pl[x.key].revNet) : null), c.upto.length - 1);
+      const g = m.gap ? [m.gap.label + ' avg'] : [];
+      CH.monthlyBars('chRev', g.concat(labels), (m.gap ? [CH.unitVal(m.gap.pl.revNet / m.gap.n)] : []).concat(c.upto.map(x => m.pl[x.key] ? CH.unitVal(m.pl[x.key].revNet) : null)), g.length + c.upto.length - 1);
       CH.lines('chMargin', labels, [
         { label: 'Gross margin', data: c.upto.map(x => m.ratios[x.key] && F.ok(m.ratios[x.key].gm) ? +(m.ratios[x.key].gm * 100).toFixed(1) : null) },
         { label: 'EBITDA margin', data: c.upto.map(x => m.ratios[x.key] && F.ok(m.ratios[x.key].ebitdaM) ? +(m.ratios[x.key].ebitdaM * 100).toFixed(1) : null) }
@@ -203,7 +222,7 @@
     const c = ctx(m, sel), t = T.plTable(m, sel);
     const title = c.pl ? 'Net revenue of ' + F.money(c.pl.revNet) + ' at ' + F.pct(c.r.gm) + ' gross margin; EBITDA ' + F.money(c.pl.ebitda) + ' and PAT ' + F.money(c.pl.pat) + ' in ' + c.mon.label
       : 'P&L not available for ' + c.mon.label;
-    let h = pageHead('Profit & loss · ' + c.mon.label, esc(title), provisionalNote(m, sel) || 'Monthly columns, financial-year-to-date and month-on-month change. Costs shown positive; deductions in parentheses.', dlBtn('pl', 'Download P&L (Excel)'));
+    let h = pageHead('Profit & loss · ' + c.mon.label, esc(title), provisionalNote(m, sel) || 'Monthly columns, financial-year-to-date and month-on-month change. Costs shown positive; deductions in parentheses.', dlBtn('pl', 'Download P&L (Excel)') + dlBtn('model', 'Financials model (Excel)'));
     h += ex('Statement of profit & loss — monthly, YTD and MoM', F.unitDef().label, renderTable(t));
     if (c.pl) {
       h += '<div class="grid g2" style="margin-top:18px">';
@@ -236,7 +255,7 @@
     const c = ctx(m, sel), t = T.bsTable(m, sel), b = c.b;
     const title = b ? 'Net worth of ' + F.money(b.equity) + ' and borrowings of ' + F.money(b.debt) + ' fund ' + F.money(b.nfa) + ' of net fixed assets and ' + F.money(b.ca - b.cash) + ' of non-cash current assets'
       : 'Balance sheet not available for ' + c.mon.label;
-    let h = pageHead('Balance sheet · as at ' + (b ? b.date : c.mon.end), esc(title), provisionalNote(m, sel) || 'Gross presentation: debit balances in creditors are shown as supplier advances, credit balances in bank ledgers as overdrawn borrowings.', dlBtn('bs', 'Download balance sheet (Excel)'));
+    let h = pageHead('Balance sheet · as at ' + (b ? b.date : c.mon.end), esc(title), provisionalNote(m, sel) || 'Gross presentation: debit balances in creditors are shown as supplier advances, credit balances in bank ledgers as overdrawn borrowings.', dlBtn('bs', 'Download balance sheet (Excel)') + dlBtn('model', 'Financials model (Excel)'));
     h += ex('Balance sheet — month-end with change vs prior month', F.unitDef().label, renderTable(t));
     if (b) {
       h += '<div class="grid g2" style="margin-top:18px">';
@@ -263,7 +282,7 @@
       : 'Monthly cash flow needs the previous month-end balance sheet';
     const lede = cf ? provisionalNote(m, sel) || 'Indirect method per Ind AS 7. Cash = cash-in-hand + bank debit balances; bank OD and overdrawn bank ledgers are treated as short-term borrowings.'
       : 'Upload the trial balance for the month before ' + c.mon.label + ' (or a TB exported with opening balances) and the cash flow, cash bridge and runway will populate.';
-    let h = pageHead('Cash flow · ' + c.mon.label, esc(title), lede, dlBtn('cf', 'Download cash flow (Excel)'));
+    let h = pageHead('Cash flow · ' + c.mon.label, esc(title), lede, dlBtn('cf', 'Download cash flow (Excel)') + dlBtn('model', 'Financials model (Excel)'));
     if (cf || ycf) {
       h += '<div class="grid g2">';
       h += cf ? ex('Cash bridge — ' + c.mon.label, F.unitDef().label + ' · blue = inflow, orange = outflow', '<div class="chart-box tall"><canvas id="chBridgeM"></canvas></div>') : '<div></div>';
@@ -318,6 +337,118 @@
       wcChart('chDays', m, c.upto);
       CH.monthlyBars('chTWC', c.upto.map(x => x.label), c.upto.map(x => m.bs[x.key] ? CH.unitVal(m.bs[x.key].tradeWC) : null), c.upto.length - 1);
     } };
+  }
+
+  /* ------------------------------ Coverage strip ------------------------ */
+  function coverageHtml(m) {
+    const last = m.fyMonths.reduce((a, x, i) => (x.hasPL || x.hasBS ? i : a), 0);
+    const chips = m.fyMonths.slice(0, Math.max(last + 1, 1)).map(x => {
+      const inGap = m.gap && x.end <= m.gap.to;
+      const cls = x.hasPL ? 'ok' : inGap ? 'block' : 'none';
+      const tip = x.hasPL ? 'Monthly TB loaded' : inGap ? 'Inside the ' + m.gap.label + ' combined block — upload this month\'s TB to see it separately' : 'No TB for this month';
+      return '<span class="chip ' + cls + '" title="' + esc(tip) + '">' + x.label.slice(0, 3) + '</span>';
+    }).join('');
+    const missing = m.fyMonths.slice(0, last + 1).filter(x => !x.hasPL).map(x => x.label.slice(0, 3));
+    return '<div class="coverage"><span>Monthly data:</span>' + chips +
+      (missing.length ? '<span>· Upload monthly TBs for <b>' + missing.join(', ') + '</b> to see each month' + (m.gap ? ' (until then ' + m.gap.label + ' is shown as one block)' : '') + '.</span>' : '<span>· All months loaded.</span>') + '</div>';
+  }
+
+  /* ------------------------------ Debt & funding ------------------------ */
+  function renderDebt(m, sel) {
+    const A = MIS.analytics, c = ctx(m, sel);
+    const lb = A.loanBook(m, sel), ds = A.debtService(m, sel), ib = A.interestByLender(m, sel);
+    if (!lb) return { html: pageHead('Debt & funding · ' + c.mon.label, 'No balance sheet for ' + c.mon.label, '', '') };
+    const title = 'Loan book of ' + F.money(lb.total) + (ds ? '; interest of ' + F.money(ds.interest) + ' in ' + c.mon.label + ' at an effective ' + F.pct(ds.costOfDebt) + ' a year' : '');
+    const tile = (l, v, s) => '<div class="kpi"><div class="lbl">' + l + '</div><div class="val">' + v + '</div><div class="d">' + s + '</div></div>';
+    let h = pageHead('Debt & funding · ' + c.mon.label, esc(title), 'Loan book from the borrowing ledgers in the trial balance; bank ledgers with credit balances are treated as overdrawn borrowings. Debt service = interest + principal repaid (fall in term debt vs last month).', dlBtn('all', 'Excel pack'));
+    h += '<div class="kpis">' +
+      tile('Total loan book', F.money(lb.total), F.ok(lb.prevTotal) ? 'vs ' + F.money(lb.prevTotal) + ' last month' : lb.rows.length + ' facilities') +
+      tile('Net debt', F.money(lb.netDebt), 'after cash of ' + F.money(lb.cash)) +
+      tile('Interest this month', ds ? F.money(ds.interest) : '–', ds ? '+ bank & finance charges ' + F.money(ds.charges) : '') +
+      tile('Effective cost of debt', ds ? F.pct(ds.costOfDebt) : '–', 'annualised interest ÷ average debt') +
+      tile('Debt service', ds && ds.hasPrev ? F.money(ds.service) : (ds ? F.money(ds.interest) : '–'), ds && ds.hasPrev ? 'interest + principal ' + F.money(ds.principal) : 'interest only (needs prior month for principal)') +
+      tile('Monthly EMI', ds && ds.emi ? F.money(ds.emi) : 'Not entered', ds && ds.emi ? 'EBITDA cover ' + F.x(ds.emiCover) : '<a href="#" data-goto="data">Enter in Data &amp; mapping</a>') + '</div>';
+    h += '<div class="grid g2">';
+    h += ex('Loan book by facility — ' + c.mon.label, F.unitDef().label, '<div class="chart-box tall"><canvas id="chLoans"></canvas></div>');
+    h += ex('Interest & finance charges by lender', F.unitDef().label + ' · month and YTD', '<div class="table-wrap"><table class="fin"><thead><tr><th>Ledger</th><th>Type</th><th class="sel">' + c.mon.label + '</th><th class="ytd">YTD</th></tr></thead><tbody>' +
+      ib.map(x => '<tr><td>' + esc(x.name) + '</td><td class="txt">' + x.kind + '</td><td class="sel">' + F.amt(x.m) + '</td><td class="ytd">' + F.amt(x.y) + '</td></tr>').join('') + '</tbody></table></div>');
+    h += '</div><div style="height:18px"></div>';
+    h += ex('Loan book, interest and debt service', F.unitDef().label, renderTable(A.debtTable(m, sel)),
+      'Source: Tally TB. Lender-wise detail inside a sub-group (e.g. "Unsecured Loans") needs that sub-group expanded in Tally; repayment schedules are not in a TB — enter contracted EMIs in Data & mapping.');
+    return { html: h, after: () => {
+      const r = lb.rows.filter(x => x.bal > 1);
+      CH.hbars('chLoans', r.map(x => x.name.length > 30 ? x.name.slice(0, 29) + '…' : x.name), r.map(x => +CH.unitVal(x.bal).toFixed(2)), { focusFirst: true });
+    } };
+  }
+
+  /* ------------------------------ Unit economics ------------------------ */
+  function renderUnit(m, sel) {
+    const A = MIS.analytics, c = ctx(m, sel);
+    const be = A.breakeven(c.pl, 1);
+    const title = be && be.be ? 'Revenue of ' + F.money(be.revM) + ' is ' + F.signedPct(be.gap, 0) + ' vs the EBITDA breakeven of ' + F.money(be.be) + ' a month (contribution margin ' + F.pct(be.cm) + ')'
+      : 'Unit economics & breakeven — ' + c.mon.label;
+    let h = pageHead('Unit economics & breakeven · ' + c.mon.label, esc(title), 'Breakeven splits costs into variable (materials consumed, direct, selling & trade spend, power) and fixed (people, rent, professional, repairs, admin). Volumes and per-kg metrics need the operating data below, because a Tally TB has no quantities.', dlBtn('all', 'Excel pack'));
+    h += ex('Breakeven analysis', F.unitDef().label + ' per month', renderTable(A.breakevenTable(m, sel)), 'Note: the month uses provisional closing stock if not yet entered, which distorts material consumption and contribution.');
+    h += '<div class="grid g2" style="margin-top:18px">';
+    h += ex('Gross sales by product — ' + c.mon.label, F.unitDef().label, '<div class="chart-box"><canvas id="chProd"></canvas></div>', 'Product grouped from sales-ledger names');
+    h += ex('Gross sales by channel — ' + c.mon.label, F.unitDef().label, '<div class="chart-box"><canvas id="chChan"></canvas></div>', 'Channel grouped from sales-ledger names (e.g. "NOICE", "Distributor")');
+    h += '</div><div style="height:18px"></div>';
+    const hasOps = m.months.some(x => Object.keys((m.ops || {})[x.key] || {}).some(k => m.ops[x.key][k] !== ''));
+    if (hasOps) {
+      const u = A.unitEconomics(m, sel);
+      const t = (l, v, s) => '<div class="wc-tile"><div class="lbl">' + l + '</div><div class="val">' + v + '</div><div class="s">' + s + '</div></div>';
+      const rs = v => (F.ok(v) ? '₹' + v.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '–');
+      h += '<div class="card" style="margin-bottom:18px"><div class="wc-tiles">' +
+        t('Volume sold', F.ok(u.kg) ? Math.round(u.kg).toLocaleString('en-IN') + ' kg' : '–', 'all products') +
+        t('Net realisation', rs(u.realisation), 'per kg sold') +
+        t('Milk cost', rs(u.milkPerL), 'per litre procured') +
+        t('Yield', F.ok(u.yield) ? u.yield.toFixed(1) + ' kg' : '–', 'per 100 L milk') +
+        t('Gross profit', rs(u.gpPerKg), 'per kg sold') +
+        t('Contribution', rs(u.contribPerKg), 'per kg sold') +
+        t('Capacity utilisation', F.pct(u.utilisation), 'production ÷ capacity') +
+        t('Revenue per employee', rs(u.revPerHead), 'in the month') + '</div></div>';
+      h += ex('Unit economics by month', 'Operating inputs × financials', renderTable(A.unitTable(m, sel)));
+    } else {
+      h += '<div class="card"><div class="exhibit-no">Volumes & per-kg economics</div><h2 class="action" style="font-size:17px">Add monthly volumes to unlock realisation per kg, milk cost per litre, yield and capacity utilisation</h2>' +
+        '<p class="lede">A Tally trial balance carries values, not quantities. Enter each month\'s milk procured (litres), production and kg sold (from the Tally Stock Summary / sales register or the plant MIS) in <a href="#" data-goto="data">Data &amp; mapping → Operating data</a>. It takes about a minute a month.</p></div>';
+    }
+    return { html: h, after: () => {
+      if (!c.pl) return;
+      const pm = A.mix(c.pl, A.productOf), cm = A.mix(c.pl, A.channelOf);
+      CH.hbars('chProd', pm.map(x => x.k), pm.map(x => +CH.unitVal(x.v).toFixed(2)), { focusFirst: true });
+      CH.hbars('chChan', cm.map(x => x.k + ' · ' + F.pct(x.share, 0)), cm.map(x => +CH.unitVal(x.v).toFixed(2)), { focusFirst: true });
+    } };
+  }
+
+  /* ------------------------------ Cost analysis ------------------------- */
+  function renderCosts(m, sel) {
+    const A = MIS.analytics, c = ctx(m, sel), ca = A.costAnalysis(m, sel);
+    const top = ca.top[0], up = ca.movers.filter(x => x.chg > 0).slice(0, 6), down = ca.movers.filter(x => x.chg < 0).reverse().slice(0, 6);
+    const title = top ? 'Largest cost in ' + c.mon.label + ' is ' + top.name + ' at ' + F.money(top.cur) + ' (' + F.pct(top.pctRev) + ' of revenue)' + (ca.spikes.length ? '; ' + ca.spikes.length + ' ledger(s) spiked above their usual run-rate' : '')
+      : 'Cost analysis — ' + c.mon.label;
+    let h = pageHead('Cost analysis · ' + c.mon.label, esc(title), 'Where the money went: largest ledgers, biggest movers versus ' + (ca.cmp ? ca.cmp.label : 'the prior period') + ', spikes (more than 1.5x the usual monthly run-rate) and the peak month for each cost line.', dlBtn('all', 'Excel pack'));
+    h += ex('Top 15 expense ledgers — ' + c.mon.label, F.unitDef().label, renderTable(A.costTable(m, sel)));
+    h += '<div class="grid g2" style="margin-top:18px">';
+    const mv = (list, cls) => list.length ? list.map(x => '<div class="mover"><span><b>' + esc(x.name) + '</b> <span class="muted small">' + esc(MIS.config.ALL_LINES[x.line].label) + '</span></span><span class="' + cls + '">' + (x.chg > 0 ? '+' : '') + F.money(x.chg) + '</span></div>').join('') : '<p class="muted">No comparison period available.</p>';
+    h += ex('Biggest cost increases vs ' + (ca.cmp ? esc(ca.cmp.label) : 'prior'), '', mv(up, 'up'));
+    h += ex('Biggest cost decreases vs ' + (ca.cmp ? esc(ca.cmp.label) : 'prior'), '', mv(down, 'down'));
+    h += '</div><div style="height:18px"></div>';
+    // Heat table
+    const cols = ca.months;
+    let t = '<div class="table-wrap"><table class="heat"><thead><tr><th>Cost line</th>' + (m.gap ? '<th>' + esc(m.gap.label) + ' avg</th>' : '') + cols.map(x => '<th>' + x.label + '</th>').join('') + '<th>YTD</th><th>Peak month</th></tr></thead><tbody>';
+    ca.heat.forEach(r => {
+      let peakLabel = '–', peakV = -Infinity;
+      r.vals.forEach((v, i) => { if (F.ok(v) && v > peakV) { peakV = v; peakLabel = cols[i].label; } });
+      t += '<tr><td>' + esc(r.label) + '</td>' + (m.gap ? '<td class="dim">' + F.amt(r.gapAvg) + '</td>' : '') +
+        r.vals.map(v => {
+          const a = F.ok(v) && r.max > 0 ? Math.max(0, Math.min(1, v / r.max)) : 0;
+          const isPeak = cols.length > 1 && F.ok(v) && v === r.max && v > 0;
+          return '<td class="' + (isPeak ? 'peak' : '') + '" style="background: rgba(0,169,244,' + (a * 0.28).toFixed(3) + ')">' + F.amt(v) + '</td>';
+        }).join('') + '<td>' + F.amt(r.ytd) + '</td><td>' + (cols.length > 1 ? peakLabel : '<span class="muted">needs 2+ months</span>') + '</td></tr>';
+    });
+    t += '</tbody></table></div>';
+    h += ex('Cost lines by month — peak month outlined', F.unitDef().label + ' · darker = closer to that line\'s peak', t);
+    return { html: h };
   }
 
   /* ------------------------------ Insights ------------------------------ */
@@ -386,6 +517,16 @@
         '<td><select data-map="' + esc(l.key) + '" class="' + (l.line !== l.rule ? 'over' : '') + '">' + optHtml(l.line) + '</select></td></tr>').join('') +
       '</tbody></table></div></div>';
 
+    // Operating data (not in a Tally TB)
+    const opsMonths = m.fyMonths.slice(0, m.fyMonths.reduce((a, x, i) => (x.hasPL || x.hasBS ? i : a), 0) + 1);
+    h += '<div class="card" style="margin-bottom:18px"><div class="exhibit-no">Operating data</div><h2 class="action" style="font-size:17px">Monthly volumes and EMIs (not available in a trial balance)</h2>' +
+      '<p class="small muted">Enter from the Tally Stock Summary / sales register, the plant MIS and the loan schedules. Saved automatically when you leave a cell. Drives unit economics (realisation per kg, milk cost per litre, yield, utilisation) and EMI cover.</p>' +
+      '<div class="scroll"><table class="plain ops-grid"><thead><tr><th>Metric</th><th>Unit</th>' + opsMonths.map(x => '<th class="num">' + x.label + '</th>').join('') + '</tr></thead><tbody>' +
+      MIS.analytics.OPS_FIELDS.map(f => '<tr><td>' + esc(f.label) + '</td><td class="muted small">' + esc(f.unit) + '</td>' + opsMonths.map(x => {
+        const v = ((state.ops[x.key] || {})[f.k]);
+        return '<td class="num"><input type="number" step="any" data-ops="' + x.key + '|' + f.k + '" value="' + (v === undefined ? '' : esc(v)) + '"></td>';
+      }).join('') + '</tr>').join('') + '</tbody></table></div></div>';
+
     // Backup
     h += '<div class="card"><div class="exhibit-no">Backup & restore</div><h2 class="action" style="font-size:17px">Keep a copy of the history</h2>' +
       '<p class="small muted">Download a backup after each month-end and store it with the MIS file. Restoring replaces the data in this browser.</p>' +
@@ -413,9 +554,26 @@
   }
 
   /* ------------------------------ render -------------------------------- */
-  const RENDER = { summary: renderSummary, pl: renderPL, bs: renderBS, cf: renderCF, wc: renderWC, insights: renderInsights, data: renderData };
+  const RENDER = { summary: renderSummary, pl: renderPL, bs: renderBS, cf: renderCF, wc: renderWC, debt: renderDebt, unit: renderUnit, costs: renderCosts, insights: renderInsights, data: renderData };
+
+  function applyTheme(theme) {
+    const t = theme === 'light' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+    CH.setTheme(t);
+    const b = $('btnTheme');
+    if (b) b.textContent = t === 'dark' ? '☀ Light' : '☾ Dark';
+  }
+
+  // Keep the tab strip directly under the (possibly wrapped) top bar
+  function stickTabs() {
+    const tb = document.querySelector('.topbar'), tabs = $('tabs');
+    if (tb && tabs) tabs.style.top = (getComputedStyle(tb).position === 'sticky' ? tb.offsetHeight : 0) + 'px';
+  }
+  window.addEventListener('resize', stickTabs);
 
   function render() {
+    setTimeout(stickTabs, 0);
+    applyTheme(state.settings.theme);
     F.setUnit(state.settings.unit);
     $('selUnit').value = state.settings.unit;
     CH.destroyAll();
@@ -435,7 +593,14 @@
     $('coName').textContent = m.company;
     document.title = m.company + ' — MIS ' + m.months.find(x => x.key === sel).label;
     $('selFY').innerHTML = m.fyList.map(f => { const y = +f.slice(0, 4); return '<option value="' + f + '"' + (f === m.fyStart ? ' selected' : '') + '>FY ' + y + '-' + String(y + 1).slice(2) + '</option>'; }).join('');
-    $('selMonth').innerHTML = m.months.slice().reverse().map(x => '<option value="' + x.key + '"' + (x.key === sel ? ' selected' : '') + '>' + x.label + (x.hasPL ? '' : ' (BS only)') + '</option>').join('');
+    // Month picker: every FY month up to the latest loaded; months without data are listed but disabled
+    const lastIdx = m.fyMonths.reduce((a, x, i) => (x.hasPL || x.hasBS ? i : a), 0);
+    $('selMonth').innerHTML = m.fyMonths.slice(0, lastIdx + 1).reverse().map(x => {
+      const ok = m.months.some(y => y.key === x.key) && (x.hasPL || x.hasBS);
+      const inGap = m.gap && x.end <= m.gap.to;
+      const note = x.hasPL ? '' : x.hasBS ? ' (balance sheet only)' : inGap ? ' — in ' + m.gap.label + ' block (upload TB)' : ' — no TB uploaded';
+      return '<option value="' + x.key + '"' + (x.key === sel ? ' selected' : '') + (ok ? '' : ' disabled') + '>' + x.label + note + '</option>';
+    }).join('');
     renderBanner(m, sel);
     exNo = 0;
     let out;
@@ -487,10 +652,17 @@
     $('selMonth').onchange = e => { state.sel = e.target.value; render(); };
     $('selFY').onchange = e => { state.fy = e.target.value; state.sel = null; dirty = true; render(); };
     $('btnExcel').onclick = () => download('all');
+    $('btnModel').onclick = () => download('model');
     $('btnPrint').onclick = () => {
       if (!getModel()) return toast('Upload a trial balance first.', true);
-      const prev = state.tab; state.tab = 'pack'; render();
-      setTimeout(() => { window.print(); state.tab = prev; render(); }, 400);
+      // Investor PDFs always print in the light theme
+      const prev = state.tab, prevTheme = state.settings.theme;
+      state.tab = 'pack'; state.settings.theme = 'light'; render();
+      setTimeout(() => { window.print(); state.tab = prev; state.settings.theme = prevTheme; render(); }, 400);
+    };
+    $('btnTheme').onclick = () => {
+      state.settings.theme = state.settings.theme === 'light' ? 'dark' : 'light';
+      save(); render();
     };
     $('tabs').onclick = e => {
       const b = e.target.closest('button[data-tab]'); if (!b) return;
@@ -523,7 +695,7 @@
       } else if (act === 'restore') $('backupInput').click();
       else if (act === 'clearall') {
         if (confirm('Delete ALL trial balances, closing-stock entries and mapping overrides stored in this browser? Download a backup first if unsure.')) {
-          state.tbs = []; state.stockOverrides = {}; state.mapOverrides = {}; state.sel = null; changed();
+          state.tbs = []; state.stockOverrides = {}; state.mapOverrides = {}; state.ops = {}; state.sel = null; changed();
         }
       }
     });
@@ -537,7 +709,14 @@
         changed(); toast('Mapping updated — all statements recalculated.');
         return;
       }
-      if (e.target.id === 'mapOnlyOver') { state.mapOnlyOver = e.target.checked; render(); }
+      if (e.target.id === 'mapOnlyOver') { state.mapOnlyOver = e.target.checked; render(); return; }
+      const o = e.target.closest('input[data-ops]');
+      if (o) {
+        const parts = o.dataset.ops.split('|');
+        state.ops[parts[0]] = state.ops[parts[0]] || {};
+        if (o.value === '') delete state.ops[parts[0]][parts[1]]; else state.ops[parts[0]][parts[1]] = parseFloat(o.value);
+        dirty = true; save(); toast('Operating data saved for ' + parts[0] + '.');
+      }
     });
     let st = null;
     document.addEventListener('input', e => {
@@ -554,7 +733,7 @@
         const s = JSON.parse(await f.text());
         if (!Array.isArray(s.tbs)) throw new Error('Not an MIS backup file.');
         if (!confirm('Replace the data in this browser with the backup from ' + (s.savedAt || 'unknown date') + ' (' + s.tbs.length + ' trial balances)?')) return;
-        state.tbs = s.tbs; state.stockOverrides = s.stockOverrides || {}; state.mapOverrides = s.mapOverrides || {}; state.sel = null;
+        state.tbs = s.tbs; state.stockOverrides = s.stockOverrides || {}; state.mapOverrides = s.mapOverrides || {}; state.ops = s.ops || {}; state.sel = null;
         changed(); toast('Backup restored.');
       } catch (err) { toast('Could not restore: ' + esc(err.message), true); }
     };
@@ -569,7 +748,11 @@
   async function download(which) {
     const m = getModel();
     if (!m) return toast('Upload a trial balance first.', true);
-    try { const name = await MIS.exporter.download(m, state.sel || m.defaultSel, which); toast('Downloaded ' + esc(name)); }
+    try {
+      const sel = state.sel || m.defaultSel;
+      const name = which === 'model' ? await MIS.modelExport.download(m, sel) : await MIS.exporter.download(m, sel, which);
+      toast('Downloaded ' + esc(name));
+    }
     catch (e) { console.error(e); toast('Excel export failed: ' + esc(e.message), true); }
   }
 
