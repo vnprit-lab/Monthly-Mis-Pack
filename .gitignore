@@ -1,0 +1,19 @@
+# Client financial data must never be committed
+*.xls
+*.xlsx
+*.xlsm
+*.csv
+*.json
+!package.json
+data/
+samples/
+.tmp-test/
+
+# Build output (regenerate with: python3 build.py)
+dist/
+
+# Local tooling
+.claude/
+.DS_Store
+.vscode/
+.idea/
